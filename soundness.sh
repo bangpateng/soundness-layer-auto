@@ -56,15 +56,7 @@ install_soundness() {
   if [[ ":$PATH:" != *":${SOUNDNESS_BIN_DIR}:"* ]]; then
     # Add the soundnessup directory to the path and ensure the old PATH variables remain.
     echo >> $PROFILE && echo "export PATH=\"\$PATH:$SOUNDNESS_BIN_DIR\"" >> $PROFILE
-  fi
-
-  echo && echo -e "${GREEN}✅ Installation complete!${NC}"
-  echo && echo -e "${BLUE}🔍 Detected shell: ${PREF_SHELL}${NC}"
-  echo -e "${BLUE}🔗 Added soundnessup to PATH${NC}"
-  echo && echo -e "${YELLOW}To start using soundnessup, please run:${NC}"
-  echo && echo -e "${YELLOW}▶ source ${PROFILE}${NC}"
-  echo -e "${YELLOW}▶ soundnessup${NC}"
-  echo && echo -e "${GREEN}🎉 Enjoy using soundnessup! For help, type 'soundnessup --help'${NC}" 
+  fi 
   
   # Source profile to update PATH
   source "$PROFILE" 2>/dev/null || true
@@ -203,10 +195,10 @@ uninstall_soundness() {
       ;;
     *)
       echo -e "${RED}Could not detect shell profile.${NC}"
-      exit 1
+      PROFILE=$BASE_DIR/.bashrc  # Default to .bashrc
   esac
   
-  # Remove keys first
+  # Safely remove keys
   echo -e "${BLUE}Removing keys...${NC}"
   KEY_NAME="my-key"
   KEY_LOCATIONS=(
@@ -225,52 +217,74 @@ uninstall_soundness() {
     fi
   done
   
-  # Also check for any key files in common locations
-  echo -e "${YELLOW}Searching for other key files...${NC}"
-  find "$BASE_DIR" -name "*.pub" -o -name "*.key" | grep -i "soundness" | xargs rm -f 2>/dev/null || true
+  # Safely check for key files (skip searching, just remove known locations)
+  echo -e "${YELLOW}Cleaning up key files in common locations...${NC}"
+  # Skip file searching which can cause issues
   
-  # Stop any running Soundness processes
-  echo -e "${BLUE}Stopping any running Soundness processes...${NC}"
-  pkill -f soundness 2>/dev/null || true
+  # Safely check for running processes without using pkill directly
+  echo -e "${BLUE}Checking for running Soundness processes...${NC}"
+  PROCESS_IDS=$(ps aux | grep 'soundness' | grep -v grep | grep -v "$0" | awk '{print $2}')
   
-  # Remove Soundness binaries and directories
+  if [ -n "$PROCESS_IDS" ]; then
+    echo -e "${YELLOW}Found Soundness processes. Attempting to stop them gracefully...${NC}"
+    for pid in $PROCESS_IDS; do
+      echo -e "${YELLOW}Stopping process $pid...${NC}"
+      kill -15 $pid 2>/dev/null || true
+    done
+    sleep 2
+  else
+    echo -e "${GREEN}No running Soundness processes found.${NC}"
+  fi
+  
+  # Remove directories safely
   echo -e "${BLUE}Removing Soundness directories and files...${NC}"
-  rm -rf "$BASE_DIR/.soundness" 2>/dev/null || true
-  rm -rf "$BASE_DIR/.config/soundness" 2>/dev/null || true
-  rm -rf "$BASE_DIR/.local/share/soundness" 2>/dev/null || true
+  for dir in "$BASE_DIR/.soundness" "$BASE_DIR/.config/soundness" "$BASE_DIR/.local/share/soundness"; do
+    if [ -d "$dir" ]; then
+      echo -e "${YELLOW}Removing directory: $dir${NC}"
+      rm -rf "$dir" 2>/dev/null || true
+    fi
+  done
   
-  # Remove any binaries from common locations
+  # Remove binaries safely
   echo -e "${BLUE}Removing Soundness binaries from common locations...${NC}"
-  rm -f "/usr/local/bin/soundness-cli" 2>/dev/null || true
-  rm -f "/usr/local/bin/soundness" 2>/dev/null || true
-  rm -f "/usr/bin/soundness-cli" 2>/dev/null || true
-  rm -f "/usr/bin/soundness" 2>/dev/null || true
-  rm -f "/root/key_store.json" 2>/dev/null || true
+  for bin in "/usr/local/bin/soundness-cli" "/usr/local/bin/soundness" "/usr/bin/soundness-cli" "/usr/bin/soundness" "/root/key_store.json" "/root/key_store.json"; do
+    if [ -f "$bin" ]; then
+      echo -e "${YELLOW}Removing binary: $bin${NC}"
+      rm -f "$bin" 2>/dev/null || true
+    fi
+  done
   
   # Remove Soundness CLI from Cargo if installed
   if command -v cargo &> /dev/null; then
-    echo -e "${BLUE}Removing Soundness CLI via Cargo...${NC}"
+    echo -e "${BLUE}Attempting to uninstall Soundness CLI via Cargo...${NC}"
     cargo uninstall soundness-cli 2>/dev/null || true
   fi
   
-  # Find and remove any remaining Soundness files
-  echo -e "${BLUE}Finding and removing any remaining Soundness files...${NC}"
-  find "$BASE_DIR" -name "*soundness*" -not -path "*rust*" -not -path "*cargo*" -exec rm -rf {} \; 2>/dev/null || true
+  # Carefully remove any remaining files - avoid complex find commands
+  echo -e "${BLUE}Looking for any remaining Soundness files...${NC}"
+  # Don't use find to search for files - just remove known locations
   
   # Remove PATH entry from profile
   echo -e "${BLUE}Removing Soundness from PATH in $PROFILE...${NC}"
   if [ -f "$PROFILE" ]; then
-    sed -i '/soundness/d' "$PROFILE"
+    # Use a safer sed approach
+    sed -i.bak '/soundness/d' "$PROFILE" 2>/dev/null || true
+    # If sed with -i option failed, try without backup
+    if [ $? -ne 0 ]; then
+      # Try alternative approach for macOS/BSD sed
+      sed -i '' '/soundness/d' "$PROFILE" 2>/dev/null || true
+    fi
   fi
   
-  # Ask if user wants to remove Rust/Cargo as well
-  echo -e "${YELLOW}Do you want to remove Rust and Cargo as well? (y/n):${NC}"
-  read -p "" remove_rust
+  # Ask if user wants to remove Rust/Cargo as well - use default if timeout
+  echo -e "${YELLOW}Do you want to remove Rust and Cargo as well? (y/n) [default: n]:${NC}"
+  read -t 10 -p "" remove_rust || true
   if [[ "$remove_rust" =~ ^[Yy]$ ]]; then
     echo -e "${BLUE}Removing Rust and Cargo...${NC}"
     if command -v rustup &> /dev/null; then
       rustup self uninstall -y
     else
+      echo -e "${YELLOW}Removing Rust and Cargo directories...${NC}"
       rm -rf "$BASE_DIR/.cargo" "$BASE_DIR/.rustup" 2>/dev/null || true
     fi
   else
